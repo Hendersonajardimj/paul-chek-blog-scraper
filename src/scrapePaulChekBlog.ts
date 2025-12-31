@@ -357,13 +357,18 @@ For each post-like item on this category page, return:
   - categories: (optional) Array of category names.
   - tags: (optional) Array of tag names.
 
-Also check for pagination:
-- If there is a "next" or "older posts" link, extract its href as nextPageUrl.
-- If no next page exists, return null for nextPageUrl.
+CRITICAL - Pagination Detection:
+- Look at the BOTTOM of the main content area for pagination controls.
+- The pagination typically shows: "Previous", page numbers (1, 2, 3...), and "Next" links.
+- If you see a "Next" link OR a page number higher than the current page, there ARE more pages.
+- Extract the href from the "Next" link as nextPageUrl.
+- The Next link URL typically looks like: /category/diet/page/2/ or https://www.paulcheksblog.com/category/diet/page/2/
+- ONLY return null for nextPageUrl if there is definitively NO "Next" link and NO higher page numbers visible.
+- When in doubt, extract the next sequential page URL.
 
 Return a single JSON object with:
 - posts: an array of post summary objects as described above
-- nextPageUrl: a string URL (absolute or relative) for the next page, or null if no further pages exist.`;
+- nextPageUrl: a string URL (absolute or relative) for the next page, or null ONLY if this is definitively the last page.`;
 
   console.log(`  Extracting category page data for ${pageUrl} ...`);
 
@@ -816,9 +821,19 @@ Return a JSON object describing all blog-like or post-like items you see in the 
       }
 
       // Normalize relative pagination URLs to absolute
-      currentUrl = result.nextPageUrl
-        ? normalizePostUrl(result.nextPageUrl, section.baseUrl)
-        : null;
+      // If nextPageUrl is null but we got posts, try fallback to next sequential page
+      if (result.nextPageUrl) {
+        currentUrl = normalizePostUrl(result.nextPageUrl, section.baseUrl);
+      } else if (result.posts.length > 0) {
+        // Fallback: try next sequential page number
+        const nextPageNum = pageNum + 1;
+        const fallbackUrl = `${section.baseUrl}page/${nextPageNum}/`;
+        console.log(`  nextPageUrl was null, trying fallback: ${fallbackUrl}`);
+        currentUrl = fallbackUrl;
+      } else {
+        // No posts and no next page - we're done
+        currentUrl = null;
+      }
       pageNum += 1;
     } catch (err) {
       console.error(
