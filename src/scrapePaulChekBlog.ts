@@ -815,7 +815,10 @@ Return a JSON object describing all blog-like or post-like items you see in the 
         );
       }
 
-      currentUrl = result.nextPageUrl;
+      // Normalize relative pagination URLs to absolute
+      currentUrl = result.nextPageUrl
+        ? normalizePostUrl(result.nextPageUrl, section.baseUrl)
+        : null;
       pageNum += 1;
     } catch (err) {
       console.error(
