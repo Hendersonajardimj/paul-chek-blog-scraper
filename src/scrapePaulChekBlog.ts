@@ -107,9 +107,9 @@ function getEnvConfig() {
     );
   }
 
-  const maxPagesRaw = process.env.MAX_PAGES_PER_SECTION ?? "2";
+  const maxPagesRaw = process.env.MAX_PAGES_PER_SECTION ?? "10";
   const maxPages = Number.parseInt(maxPagesRaw, 10);
-  const maxPagesPerSection = Number.isFinite(maxPages) && maxPages > 0 ? maxPages : 2;
+  const maxPagesPerSection = Number.isFinite(maxPages) && maxPages > 0 ? maxPages : 10;
 
   return { apiKey, projectId, model, maxPagesPerSection };
 }
@@ -180,6 +180,50 @@ function slugFromUrl(url: string | undefined): string | null {
     return last.toLowerCase().replace(/[^a-z0-9-_]+/g, "-");
   } catch {
     return null;
+  }
+}
+
+/**
+ * Validates that a URL is an actual web URL, not an element ID.
+ * Returns true for:
+ *   - Absolute URLs (http:// or https://)
+ *   - Relative paths starting with /
+ * Returns false for:
+ *   - Element IDs like "0-346"
+ *   - Empty strings
+ *   - Other non-URL strings
+ */
+function isValidPostUrl(url: string | undefined): boolean {
+  if (!url || typeof url !== "string") return false;
+  const trimmed = url.trim();
+  if (!trimmed) return false;
+
+  // Absolute URL
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    return true;
+  }
+
+  // Relative path (must start with /)
+  if (trimmed.startsWith("/")) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Normalizes a URL to absolute form using the blog's base domain.
+ */
+function normalizePostUrl(url: string, baseUrl: string): string {
+  if (url.startsWith("http://") || url.startsWith("https://")) {
+    return url;
+  }
+  // Relative URL - combine with base
+  try {
+    const base = new URL(baseUrl);
+    return new URL(url, base.origin).href;
+  } catch {
+    return url;
   }
 }
 
@@ -300,13 +344,22 @@ async function extractCategoryPage(
 On THIS PAGE ONLY (do not click through to other category pages or archives):
 - Identify every item that looks like a blog entry, article, or podcast episode in the main content area.
 - The layout and visual treatment may differ between Doctor sections (Dr. Diet, Dr. Quiet, Dr. Movement, Dr. Happiness). Do NOT rely on specific CSS classes or grid positions. Instead, use the page semantics: post-like cards or list items with a title that links to a detail page.
-- For each such post-like item on this category page, return at minimum:
-  - the URL of the post (string). Prefer an absolute URL; if only a relative URL is present, return that string anyway.
-  - the post title (string).
-- Optionally, if available, also return:
-  - the published date as a string, if any date text is shown for the item.
-  - the list of categories and tags as arrays of strings.
-- Also, if there is a pagination control that links to a "next" page (for older posts), return its URL as nextPageUrl. This may be an absolute or relative URL. If there is no next page, return null for nextPageUrl.
+
+CRITICAL: For each post, you MUST extract the ACTUAL href attribute from the link element, NOT an internal element ID.
+- The URL must be a real web URL starting with "http://" or "https://" or a path starting with "/".
+- Example of a CORRECT url: "https://www.paulcheksblog.com/water-as-medicine-with-isabel-friend/"
+- Example of an INCORRECT url: "0-346" (this is an element ID, NOT a URL)
+
+For each post-like item on this category page, return:
+  - url: The href attribute of the link to the post detail page. This MUST be an actual URL (absolute like "https://..." or relative like "/post-slug/"), NOT an element identifier.
+  - title: The post title text.
+  - date: (optional) The published date as a string, if visible.
+  - categories: (optional) Array of category names.
+  - tags: (optional) Array of tag names.
+
+Also check for pagination:
+- If there is a "next" or "older posts" link, extract its href as nextPageUrl.
+- If no next page exists, return null for nextPageUrl.
 
 Return a single JSON object with:
 - posts: an array of post summary objects as described above
@@ -518,12 +571,16 @@ async function scrapeSection(
 
   // Create a new page for this section and navigate to the first category page
   const pageInstance = await context.newPage(currentUrl);
+  // Give the page time to fully load before extraction
+  await new Promise((resolve) => setTimeout(resolve, 3000));
 
   while (currentUrl && pageNum <= maxPagesPerSection && sessionHealthy) {
     console.log(`\n[${section.name}] Page ${pageNum} -> ${currentUrl}`);
 
     if (pageNum > 1) {
       await pageInstance.goto(currentUrl);
+      // Give the page time to fully load before extraction
+      await new Promise((resolve) => setTimeout(resolve, 3000));
     }
 
     runReport.totals.categoryPagesVisited += 1;
@@ -613,6 +670,8 @@ Return a JSON object describing all blog-like or post-like items you see in the 
       runReport.totals.postsDiscovered += result.posts.length;
 
       let newThisPage = 0;
+      let invalidUrlCount = 0;
+
       for (const summary of result.posts) {
         if (!sessionHealthy) {
           console.warn(
@@ -621,13 +680,25 @@ Return a JSON object describing all blog-like or post-like items you see in the 
           break;
         }
 
-        if (seenUrls.has(summary.url)) {
-          console.log(`    Skipping already-seen post: ${summary.url}`);
+        // Validate URL before processing
+        if (!isValidPostUrl(summary.url)) {
+          console.warn(
+            `    Skipping invalid URL (likely element ID): ${summary.url}`
+          );
+          invalidUrlCount++;
           continue;
         }
-        seenUrls.add(summary.url);
 
-        console.log(`    Processing post URL: ${summary.url}`);
+        // Normalize relative URLs to absolute
+        const normalizedUrl = normalizePostUrl(summary.url, section.baseUrl);
+
+        if (seenUrls.has(normalizedUrl)) {
+          console.log(`    Skipping already-seen post: ${normalizedUrl}`);
+          continue;
+        }
+        seenUrls.add(normalizedUrl);
+
+        console.log(`    Processing post URL: ${normalizedUrl}`);
 
         let detail: PostDetail | null = null;
         const maxAttempts = 3;
@@ -640,7 +711,7 @@ Return a JSON object describing all blog-like or post-like items you see in the 
             detail = await extractPostDetail(
               stagehand,
               pageInstance,
-              summary.url,
+              normalizedUrl,
               section,
               runId
             );
@@ -658,7 +729,7 @@ Return a JSON object describing all blog-like or post-like items you see in the 
               (runReport.errors[errorType] ?? 0) + 1;
 
             console.error(
-              `    Error on attempt ${attempt} for ${summary.url}:`,
+              `    Error on attempt ${attempt} for ${normalizedUrl}:`,
               err instanceof Error ? err.message : err
             );
             console.error("    Full error object:", err);
@@ -666,7 +737,7 @@ Return a JSON object describing all blog-like or post-like items you see in the 
             if (isSessionError && attempt === maxAttempts) {
               consecutiveSessionErrors += 1;
               console.error(
-                `    Stagehand session error persisted for ${summary.url} after ${maxAttempts} attempts. consecutiveSessionErrors=${consecutiveSessionErrors}`
+                `    Stagehand session error persisted for ${normalizedUrl} after ${maxAttempts} attempts. consecutiveSessionErrors=${consecutiveSessionErrors}`
               );
               if (consecutiveSessionErrors >= SESSION_ERROR_POST_THRESHOLD) {
                 console.error(
@@ -680,7 +751,7 @@ Return a JSON object describing all blog-like or post-like items you see in the 
 
             if (!isSessionError || attempt === maxAttempts) {
               console.error(
-                `    Giving up on post after ${attempt} attempts: ${summary.url}`
+                `    Giving up on post after ${attempt} attempts: ${normalizedUrl}`
               );
               detail = null;
               break;
@@ -738,6 +809,11 @@ Return a JSON object describing all blog-like or post-like items you see in the 
 
       totalNew += newThisPage;
       console.log(`  New posts this page: ${newThisPage}`);
+      if (invalidUrlCount > 0) {
+        console.warn(
+          `  WARNING: ${invalidUrlCount} posts had invalid URLs (element IDs) and were skipped`
+        );
+      }
 
       currentUrl = result.nextPageUrl;
       pageNum += 1;
