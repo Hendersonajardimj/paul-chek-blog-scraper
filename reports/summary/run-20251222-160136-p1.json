@@ -1,0 +1,45 @@
+{
+  "runId": "20251222-160136-p1",
+  "startedAt": "2025-12-22T21:01:36.366Z",
+  "config": {
+    "maxPagesPerSection": 1,
+    "stagehandModel": "google/gemini-3-flash-preview"
+  },
+  "totals": {
+    "sectionsVisited": 4,
+    "categoryPagesVisited": 4,
+    "postsDiscovered": 27,
+    "postsSaved": 0,
+    "postsFailed": 27
+  },
+  "sections": {
+    "dr-diet": {
+      "pagesVisited": 1,
+      "postsDiscovered": 9,
+      "postsSaved": 0,
+      "postsFailed": 9
+    },
+    "dr-quiet": {
+      "pagesVisited": 1,
+      "postsDiscovered": 9,
+      "postsSaved": 0,
+      "postsFailed": 9
+    },
+    "dr-movement": {
+      "pagesVisited": 1,
+      "postsDiscovered": 9,
+      "postsSaved": 0,
+      "postsFailed": 9
+    },
+    "dr-happiness": {
+      "pagesVisited": 1,
+      "postsDiscovered": 0,
+      "postsSaved": 0,
+      "postsFailed": 0
+    }
+  },
+  "errors": {
+    "StagehandServerError": 81
+  },
+  "finishedAt": "2025-12-22T21:05:10.848Z"
+}
