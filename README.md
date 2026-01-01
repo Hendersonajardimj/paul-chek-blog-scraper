@@ -1,6 +1,6 @@
 # Paul Chek Blog Scraper
 
-This is a small TypeScript CLI that uses [Browserbase Stagehand](https://github.com/browserbase/stagehand) to scrape Paul Chek's blog into local Markdown files, one file per post. It focuses on the four Doctor sections where full pagination is exposed:
+A TypeScript CLI that uses [Browserbase Stagehand](https://github.com/browserbase/stagehand) to scrape Paul Chek's blog into a PostgreSQL database and local Markdown files. It focuses on the four Doctor sections where full pagination is exposed:
 
 - Dr. Diet
 - Dr. Quiet
@@ -173,6 +173,143 @@ This allows you (or an AI assistant) to inspect what Stagehand "saw" on the page
 - The script logs which section and page it is working on, how many posts were extracted from each page, and where files are written.
 - If a particular Stagehand task (section/page) fails, it logs the error and continues with the next page/section instead of crashing the entire run.
 - At the end, it prints a summary of total unique posts saved and the output directory.
+
+## Current state
+
+As of January 2026, the scraper has collected **838 unique posts** across all four Doctor sections:
+
+| Section | Pages | Posts |
+|---------|-------|-------|
+| Dr. Diet | 29 | ~250 |
+| Dr. Quiet | 13 | ~100 |
+| Dr. Movement | 35 | ~315 |
+| Dr. Happiness | 35 | ~315 |
+
+The scraper is **incremental** - it loads existing post URLs from the database at startup and skips them, so subsequent runs only process new content.
+
+## Database schema
+
+Posts are stored in PostgreSQL with the following schema:
+
+```sql
+CREATE TABLE IF NOT EXISTS posts (
+  id SERIAL PRIMARY KEY,
+  url TEXT UNIQUE NOT NULL,
+  slug TEXT NOT NULL,
+  title TEXT NOT NULL,
+  date_published TIMESTAMPTZ NULL,
+  doctor_section TEXT NOT NULL,
+  categories TEXT[] NOT NULL DEFAULT '{}',
+  tags TEXT[] NOT NULL DEFAULT '{}',
+  markdown TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+The `url` column has a UNIQUE constraint. The `upsertPost()` function uses `ON CONFLICT DO UPDATE`, so:
+- Duplicate URLs update existing records
+- Multiple concurrent sessions won't create duplicates
+- Re-running the scraper is safe and idempotent
+
+## Efficiency features
+
+### Skip already-scraped posts
+
+At startup, the scraper loads all existing URLs from the database:
+
+```typescript
+const existingUrls = await getExistingPostUrls();
+const seenUrls = new Set<string>(existingUrls);
+```
+
+Posts with URLs in `seenUrls` are skipped entirely - no navigation, no extraction, no API calls. This makes incremental runs fast and cheap.
+
+### Extended session timeout
+
+Browserbase sessions are configured with a 30-minute timeout (default is 5 minutes):
+
+```typescript
+browserbaseSessionCreateParams: {
+  timeout: 30 * 60, // 30 minutes in seconds (max is 21600 = 6 hours)
+  keepAlive: true,
+}
+```
+
+This prevents session timeouts when scraping deep pagination (pages 25-35 take significant time).
+
+### Pagination fallback
+
+If the LLM returns an invalid `nextPageUrl` (like an element ID `"0-35378"` instead of a real URL), the scraper falls back to the next sequential page number:
+
+```typescript
+const fallbackUrl = `${section.baseUrl}page/${nextPageNum}/`;
+```
+
+This ensures pagination continues even when extraction is imperfect.
+
+## Troubleshooting
+
+### 429 errors (concurrent session limit)
+
+```
+429 You've exceeded your max concurrent sessions limit
+```
+
+**Cause:** Browserbase limits concurrent sessions per plan. Killed scrapes may leave lingering sessions.
+
+**Solutions:**
+1. Wait 2-5 minutes for old sessions to timeout
+2. Kill lingering sessions via Browserbase dashboard
+3. Upgrade your plan for more concurrent sessions
+
+### 400 errors (timeout value)
+
+```
+400 body/timeout must be <= 21600
+```
+
+**Cause:** Session timeout was specified in milliseconds instead of seconds.
+
+**Solution:** The timeout is now correctly set to `30 * 60` (1800 seconds), not `30 * 60 * 1000`.
+
+### Session timeouts on deep pages
+
+If the scraper times out before reaching the end of a section's archive:
+
+1. Increase `MAX_PAGES_PER_SECTION` in `.env`
+2. Consider increasing `browserbaseSessionCreateParams.timeout` (max 21600 seconds = 6 hours)
+3. Run multiple times - the incremental logic will pick up where it left off
+
+### Posts with element IDs instead of URLs
+
+The LLM sometimes returns element IDs (like `"0-346"`) instead of actual URLs. The scraper validates URLs and logs warnings:
+
+```
+Skipping invalid URL (likely element ID): 0-346
+```
+
+These posts will be retried on subsequent runs when the LLM extraction succeeds.
+
+## Architecture
+
+```
+src/
+├── scrapePaulChekBlog.ts  # Main scraper logic
+└── db.ts                   # PostgreSQL operations
+
+data/paul-chek-blog/       # Local markdown files
+├── dr-diet/
+├── dr-quiet/
+├── dr-movement/
+└── dr-happiness/
+
+reports/                   # Telemetry and debug artifacts
+├── runs.log              # JSONL timeline of all runs
+├── summary/              # Per-run JSON summaries
+├── latest-summary.json   # Pointer to most recent run
+└── raw/                  # Stagehand metrics/history
+```
 
 ## Next steps
 
