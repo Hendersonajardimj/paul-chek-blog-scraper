@@ -228,6 +228,34 @@ function normalizePostUrl(url: string, baseUrl: string): string {
 }
 
 /**
+ * Checks if a pagination URL looks like an element ID instead of a real URL.
+ * Element IDs from the LLM extraction often look like: "0-35378", "5", "2-9", etc.
+ * Real pagination URLs should contain "/page/" or be proper paths.
+ */
+function isValidPaginationUrl(url: string | undefined): boolean {
+  if (!url || typeof url !== "string") return false;
+  const trimmed = url.trim();
+  if (!trimmed) return false;
+
+  // Check for element ID patterns (digits with optional hyphen-digits)
+  // These look like: "0-35378", "5", "2-9", etc.
+  if (/^\d+(-\d+)?$/.test(trimmed)) {
+    return false;
+  }
+
+  // Must be absolute URL or start with /
+  if (
+    trimmed.startsWith("http://") ||
+    trimmed.startsWith("https://") ||
+    trimmed.startsWith("/")
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Normalize a human-readable blog date (e.g. "December 26th, 2025") into
  * an ISO-compatible string Postgres can parse (YYYY-MM-DD).
  *
@@ -821,14 +849,21 @@ Return a JSON object describing all blog-like or post-like items you see in the 
       }
 
       // Normalize relative pagination URLs to absolute
-      // If nextPageUrl is null but we got posts, try fallback to next sequential page
-      if (result.nextPageUrl) {
+      // If nextPageUrl is null/invalid but we got posts, try fallback to next sequential page
+      const hasValidNextUrl = isValidPaginationUrl(result.nextPageUrl);
+      if (result.nextPageUrl && hasValidNextUrl) {
         currentUrl = normalizePostUrl(result.nextPageUrl, section.baseUrl);
       } else if (result.posts.length > 0) {
         // Fallback: try next sequential page number
         const nextPageNum = pageNum + 1;
         const fallbackUrl = `${section.baseUrl}page/${nextPageNum}/`;
-        console.log(`  nextPageUrl was null, trying fallback: ${fallbackUrl}`);
+        if (result.nextPageUrl && !hasValidNextUrl) {
+          console.log(
+            `  nextPageUrl "${result.nextPageUrl}" looks like element ID, trying fallback: ${fallbackUrl}`
+          );
+        } else {
+          console.log(`  nextPageUrl was null, trying fallback: ${fallbackUrl}`);
+        }
         currentUrl = fallbackUrl;
       } else {
         // No posts and no next page - we're done
