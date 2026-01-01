@@ -2,7 +2,7 @@ import { Stagehand } from "@browserbasehq/stagehand";
 import { z } from "zod/v3";
 import fs from "fs-extra";
 import path from "path";
-import { initDb, upsertPost, PostRecord } from "./db";
+import { initDb, upsertPost, PostRecord, getExistingPostUrls } from "./db";
 
 const OUTPUT_ROOT = path.join(process.cwd(), "data", "paul-chek-blog");
 
@@ -1046,7 +1046,13 @@ async function main() {
   // Stagehand session fails to initialize.
   await appendRunLogEntry(reportsRoot, runReport, "run-start");
 
-  const seenUrls = new Set<string>();
+  // Load existing post URLs from database to skip already-scraped posts.
+  // This is a major efficiency improvement - we don't need to navigate to
+  // and re-extract posts we already have.
+  const existingUrls = await getExistingPostUrls();
+  console.log(`Loaded ${existingUrls.size} existing post URLs from database - will skip these.`);
+
+  const seenUrls = new Set<string>(existingUrls);
   let totalNew = 0;
   let scrapeError: unknown = null;
 
@@ -1061,6 +1067,12 @@ async function main() {
         projectId,
         model,
         verbose: 2, // maximum verbosity for debugging Stagehand behavior
+        browserbaseSessionCreateParams: {
+          // Extend session timeout to 30 minutes (default is 5 min)
+          // This helps prevent session timeouts during long scraping runs
+          timeout: 30 * 60 * 1000, // 30 minutes in milliseconds
+          keepAlive: true,
+        },
       });
 
       let newInSection = 0;

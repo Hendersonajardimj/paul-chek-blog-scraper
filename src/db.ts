@@ -43,6 +43,19 @@ export async function initDb() {
   `);
 }
 
+/**
+ * Get all existing post URLs from the database.
+ * Used to skip already-scraped posts for efficiency.
+ */
+export async function getExistingPostUrls(): Promise<Set<string>> {
+  if (!pool) {
+    return new Set();
+  }
+
+  const result = await pool.query<{ url: string }>(`SELECT url FROM posts`);
+  return new Set(result.rows.map((row) => row.url));
+}
+
 export async function upsertPost(post: PostRecord) {
   if (!pool) {
     return;
