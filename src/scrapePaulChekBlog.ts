@@ -1070,7 +1070,8 @@ async function main() {
         browserbaseSessionCreateParams: {
           // Extend session timeout to 30 minutes (default is 5 min)
           // This helps prevent session timeouts during long scraping runs
-          timeout: 30 * 60 * 1000, // 30 minutes in milliseconds
+          // Note: Browserbase expects seconds, max is 21600 (6 hours)
+          timeout: 30 * 60, // 30 minutes in seconds
           keepAlive: true,
         },
       });
