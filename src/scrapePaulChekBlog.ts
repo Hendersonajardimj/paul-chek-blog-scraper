@@ -1,3 +1,4 @@
+import './sentry'
 import { Stagehand } from "@browserbasehq/stagehand";
 import { z } from "zod/v3";
 import fs from "fs-extra";

@@ -1,3 +1,4 @@
+import './sentry'
 import { Stagehand } from "@browserbasehq/stagehand";
 import { z } from "zod/v3";
 import fs from "fs-extra";
@@ -478,13 +479,41 @@ async function extractTranscriptFromDOM(page: any, episodeUrl: string): Promise<
     // Use page.evaluate to run JavaScript directly in the browser
     // This extracts transcript text without any LLM calls
     const transcript = await page.evaluate(() => {
-      // Strategy 1: Look for transcript container by common patterns
+      // Strategy 1: podscripts.co specific - extract from .pod_text elements
+      // This is the most reliable method for podscripts.co transcripts
+      const podTextElements = document.querySelectorAll('.pod_text');
+      if (podTextElements.length > 0) {
+        const texts: string[] = [];
+        podTextElements.forEach(el => {
+          const text = el.textContent?.trim();
+          if (text) texts.push(text);
+        });
+        if (texts.length > 0) {
+          return texts.join('\n\n');
+        }
+      }
+
+      // Strategy 2: Try .seek_pod_segment elements (alternative structure)
+      const segmentElements = document.querySelectorAll('.seek_pod_segment');
+      if (segmentElements.length > 0) {
+        const texts: string[] = [];
+        segmentElements.forEach(el => {
+          const text = el.textContent?.trim();
+          if (text) texts.push(text);
+        });
+        if (texts.length > 0) {
+          return texts.join('\n\n');
+        }
+      }
+
+      // Strategy 3: Look for transcript container by common patterns
       const transcriptSelectors = [
+        '.podcast-transcript',
+        '.list-single-main-wrapper',
         '[class*="transcript"]',
         '[id*="transcript"]',
         '[data-transcript]',
         '.episode-transcript',
-        '.podcast-transcript',
         '#transcript',
       ];
 
@@ -495,7 +524,7 @@ async function extractTranscriptFromDOM(page: any, episodeUrl: string): Promise<
         }
       }
 
-      // Strategy 2: Look for content with "Starting point is" timestamps
+      // Strategy 4: Look for content with "Starting point is" timestamps
       const allText = document.body.innerText;
       const startMatch = allText.indexOf("Starting point is");
       if (startMatch !== -1) {
@@ -524,7 +553,7 @@ async function extractTranscriptFromDOM(page: any, episodeUrl: string): Promise<
         return cleanedContent.trim();
       }
 
-      // Strategy 3: Get main content area
+      // Strategy 5: Get main content area
       const mainSelectors = ['main', 'article', '[role="main"]', '.content', '#content'];
       for (const selector of mainSelectors) {
         const el = document.querySelector(selector);
@@ -633,11 +662,27 @@ async function scrapeAllPages(
         try {
           // Navigate to episode page
           await pageInstance.goto(normalizedUrl);
-          await new Promise((resolve) => setTimeout(resolve, 1500));
+          await new Promise((resolve) => setTimeout(resolve, 2000));
 
           // Extract transcript using DOM - NO LLM CALL!
-          const rawTranscript = await extractTranscriptFromDOM(pageInstance, normalizedUrl);
-          const transcript = cleanTranscript(rawTranscript);
+          let rawTranscript = await extractTranscriptFromDOM(pageInstance, normalizedUrl);
+          let transcript = cleanTranscript(rawTranscript);
+
+          // If transcript is short, scroll to trigger lazy loading and retry
+          if (!transcript || transcript.length < 500) {
+            console.log(`    Retrying with scroll (got ${transcript.length} chars)...`);
+            await pageInstance.evaluate(() => {
+              window.scrollTo(0, document.body.scrollHeight / 2);
+            });
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+            await pageInstance.evaluate(() => {
+              window.scrollTo(0, document.body.scrollHeight);
+            });
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+
+            rawTranscript = await extractTranscriptFromDOM(pageInstance, normalizedUrl);
+            transcript = cleanTranscript(rawTranscript);
+          }
 
           if (!transcript || transcript.length < 500) {
             console.warn(`    Warning: Short/empty transcript (${transcript.length} chars)`);
