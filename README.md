@@ -295,21 +295,84 @@ These posts will be retried on subsequent runs when the LLM extraction succeeds.
 
 ```
 src/
-├── scrapePaulChekBlog.ts  # Main scraper logic
-└── db.ts                   # PostgreSQL operations
+├── scrapePaulChekBlog.ts    # Paul Chek blog scraper
+├── scrapeFoundersPodcast.ts # Founders Podcast scraper
+└── db.ts                     # PostgreSQL operations (shared)
 
-data/paul-chek-blog/       # Local markdown files
-├── dr-diet/
-├── dr-quiet/
-├── dr-movement/
-└── dr-happiness/
+data/
+├── paul-chek-blog/          # Paul Chek blog posts
+│   ├── dr-diet/
+│   ├── dr-quiet/
+│   ├── dr-movement/
+│   └── dr-happiness/
+└── founders-podcast/        # Founders Podcast transcripts
 
-reports/                   # Telemetry and debug artifacts
-├── runs.log              # JSONL timeline of all runs
-├── summary/              # Per-run JSON summaries
-├── latest-summary.json   # Pointer to most recent run
-└── raw/                  # Stagehand metrics/history
+reports/                     # Telemetry and debug artifacts
+├── runs.log                # JSONL timeline of all runs
+├── summary/                # Per-run JSON summaries
+├── latest-summary.json     # Pointer to most recent run
+└── raw/                    # Stagehand metrics/history
 ```
+
+The database includes a `source` column to distinguish between content types (`paul-chek-blog` vs `founders-podcast`).
+
+## Founders Podcast Scraper
+
+A second scraper for [The Founders Podcast](https://founderspodcast.com/) transcripts from podscripts.co:
+
+```bash
+# Run scraper (incremental - skips already-saved episodes)
+npm run scrape:founders
+
+# Limit pages for testing
+MAX_PAGES_FOUNDERS=1 npm run scrape:founders
+```
+
+### Current State (January 2026)
+
+| Metric | Value |
+|--------|-------|
+| Episodes saved | **374** |
+| Total on site | ~432 |
+| Coverage | ~87% |
+| Missing | ~58 (no transcripts available on podscripts.co) |
+
+The scraper is **fully optimized** - it uses direct DOM extraction for both listing pages and transcripts, resulting in **zero LLM calls** in most runs. LLM is only used as a fallback if DOM extraction fails.
+
+### Output
+
+Transcripts are saved to `data/founders-podcast/` with YAML front matter:
+
+```yaml
+---
+title: "#408 How to Make a Few MORE Billion Dollars: Brad Jacobs"
+url: "https://podscripts.co/podcasts/founders/408-..."
+episode_number: 408
+date: "2025-12-29"
+category: "Business"
+source: "founders-podcast"
+---
+
+[Full transcript text]
+```
+
+### Architecture
+
+The scraper uses a two-stage approach:
+
+1. **Listing pages**: DOM extraction finds all `<a href="/podcasts/founders/...">` links
+2. **Episode pages**: DOM extraction finds transcript content via selectors and text patterns
+
+This eliminates the LLM reliability issues (element IDs instead of URLs) that plagued earlier versions.
+
+### Known Issues
+
+| Issue | Cause | Status |
+|-------|-------|--------|
+| ~58 episodes without transcripts | Not available on podscripts.co | Cannot fix (source limitation) |
+| Some transcripts not extracted | DOM selectors don't match older page layouts | **Needs investigation** |
+
+**Transcript extraction bug**: Some episodes (e.g., #95 Claude Shannon, #141 Arnold Schwarzenegger) have transcripts on the site but return only 467 chars (page boilerplate). The DOM extraction selectors may not match the page structure for older episodes. These need manual review or selector improvements.
 
 ## Next steps
 

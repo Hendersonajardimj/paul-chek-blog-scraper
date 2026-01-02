@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "scrape": "tsx -r dotenv/config src/scrapePaulChekBlog.ts"
+    "scrape": "tsx -r dotenv/config src/scrapePaulChekBlog.ts",
+    "scrape:founders": "tsx -r dotenv/config src/scrapeFoundersPodcast.ts"
   },
   "keywords": [],
   "author": "",
