@@ -1,6 +1,15 @@
 # WARP.md
 
-This file provides guidance to WARP (warp.dev) when working with code in this repository.
+This file provides guidance to WARP (warp.dev) and Claude Code when working with code in this repository.
+
+## Current State (January 2026)
+
+| Source | Episodes/Posts | Coverage | Status |
+|--------|----------------|----------|--------|
+| Paul Chek Blog | 838 posts | ~100% | Complete |
+| Founders Podcast | 374 episodes | ~87% | In progress |
+
+**Total corpus**: 1,212 documents ready for RAG pipeline.
 
 ## Commands
 
@@ -27,8 +36,9 @@ cp .env.example .env
 Notes for agents:
 - If `DATABASE_URL` is **unset**, the scraper will still run and write Markdown files, but DB writes are skipped (see `src/db.ts`).
 - If `DATABASE_URL` is set, the first run will auto-create a `posts` table if it does not exist.
+- The database uses a `source` column to distinguish between `paul-chek-blog` and `founders-podcast` content.
 
-### Run the main scraper
+### Run the Paul Chek Blog scraper
 
 The primary entrypoint is `src/scrapePaulChekBlog.ts`, exposed via the `scrape` npm script:
 
@@ -41,17 +51,31 @@ This will:
 - Iterate through the four Doctor sections (Diet, Quiet, Movement, Happiness).
 - Paginate category pages and extract post metadata.
 - Visit each new post and extract a detailed Markdown body.
-- Write posts to Postgres (if configured) and to local Markdown under `data/`.
+- Write posts to Postgres (if configured) and to local Markdown under `data/paul-chek-blog/`.
 
-### Quick/cheap smoke run
-
-Limit pagination to a single page per Doctor section for a cheaper test run:
+### Run the Founders Podcast scraper
 
 ```bash path=null start=null
-MAX_PAGES_PER_SECTION=1 npm run scrape
+npm run scrape:founders
 ```
 
-This is useful when validating environment setup or after code changes, since it only touches the first page in each section.
+This scraper:
+- Uses **direct DOM extraction** for both listing pages and transcripts (zero LLM calls)
+- Scrapes transcripts from podscripts.co/podcasts/founders/
+- Writes to `data/founders-podcast/` and Postgres with `source: 'founders-podcast'`
+- Is incremental - skips already-saved episodes
+
+### Quick/cheap smoke runs
+
+```bash path=null start=null
+# Paul Chek: 1 page per section
+MAX_PAGES_PER_SECTION=1 npm run scrape
+
+# Founders: 1 page only
+MAX_PAGES_FOUNDERS=1 npm run scrape:founders
+```
+
+This is useful when validating environment setup or after code changes.
 
 ### Type checking
 
@@ -156,3 +180,119 @@ The scraper is designed to be resilient to partial failures:
 - **Stagehand behavior**: inspect `reports/raw/stagehand-*.json`, `stagehand-metrics-*.json`, and `stagehand-history-*.json` for per-section metrics/history.
 - **Category-page edge cases**: open `reports/raw/category-debug-<runId>-<section-slug>-p<page>.json` to see what Stagehand "saw" on pages where structured extraction returned 0 posts.
 - **Output corpus**: Markdown posts live under `data/paul-chek-blog/{doctor-slug}/`, each with YAML front matter suitable for ingestion into RAG or other indexing pipelines.
+
+## Founders Podcast Scraper Architecture
+
+The Founders Podcast scraper (`src/scrapeFoundersPodcast.ts`) follows a different architecture optimized for reliability and cost:
+
+### Two-stage DOM extraction (zero LLM calls)
+
+1. **Listing pages**: `extractEpisodeListFromDOM()` uses `page.evaluate()` to find all `<a href="/podcasts/founders/...">` links directly from the DOM
+2. **Episode pages**: `extractTranscriptFromDOM()` extracts transcript text via CSS selectors and text patterns
+
+This eliminates the LLM reliability issues that plagued earlier versions.
+
+### Why DOM extraction instead of LLM?
+
+The original implementation used Stagehand's LLM extraction for listing pages, but encountered a critical bug:
+
+**Problem**: On some pages (3, 11, 13, 16), the LLM returned element IDs (like `"28-75126"`) instead of actual URLs (like `"/podcasts/founders/95-claude-shannon"`).
+
+**Root cause**: The LLM's accessibility tree representation includes internal node IDs, and the model sometimes confused these with href attributes.
+
+**Solution**: Direct DOM extraction using `page.evaluate()` always returns the actual href attribute, eliminating this failure mode entirely.
+
+### Known issues
+
+| Issue | Cause | Affected | Fix Status |
+|-------|-------|----------|------------|
+| ~58 episodes without transcripts | Not available on podscripts.co | Older episodes | Cannot fix (source limitation) |
+| Some transcripts return 467 chars | DOM selectors don't match older layouts | #95, #141, others | **Needs investigation** |
+
+**Transcript extraction bug details**: Episodes like #95 Claude Shannon have full transcripts on podscripts.co (verified via web search), but our `extractTranscriptFromDOM()` returns only 467 chars (page boilerplate). The selectors in the function may not match the HTML structure of older episode pages.
+
+## Lessons Learned
+
+### 1. DOM extraction > LLM extraction for structured data
+
+When the target data has a predictable structure (links, text content), direct DOM extraction is:
+- **More reliable**: No LLM hallucinations or element ID confusion
+- **Faster**: ~400ms vs ~30s per page
+- **Cheaper**: Zero LLM tokens
+
+Use LLM extraction only when:
+- Content structure is unpredictable
+- Semantic understanding is required
+- DOM selectors would be too fragile
+
+### 2. Incremental scraping is essential
+
+Both scrapers load existing URLs from the database at startup and skip them. This:
+- Makes re-runs cheap and fast
+- Allows recovery from timeouts/errors
+- Enables gradual corpus building
+
+### 3. Browserbase session limits
+
+- Default timeout: 5 minutes (too short for deep pagination)
+- Extended timeout: 30 minutes (sufficient for most runs)
+- Maximum timeout: 6 hours (21600 seconds)
+
+If scraping times out, just re-run - incremental logic will continue from where it left off.
+
+### 4. LLM pagination is unreliable
+
+The LLM sometimes returns invalid `nextPageUrl` values. Solution: use sequential page numbers as the primary pagination strategy, ignore LLM's `nextPageUrl`.
+
+```typescript
+// Always use sequential pagination
+pageNum += 1;
+currentUrl = `${BASE_URL}?page=${pageNum}`;
+```
+
+## Roadmap
+
+### Immediate (fix bugs)
+
+1. **Fix transcript extraction for older episodes**
+   - Investigate page structure differences on older podscripts.co pages
+   - Episodes #95, #141, and ~20-30 others have transcripts but return only boilerplate
+   - May need additional CSS selectors or text pattern matching
+
+2. **Audit "missing" episodes**
+   - Use web search to verify which of the ~58 "missing" episodes truly don't have transcripts
+   - Some may be extraction failures, not source limitations
+
+### Short-term (complete corpus)
+
+3. **Re-run Founders scraper after fixes**
+   - Target: 400+ episodes (up from 374)
+   - Estimate: 1-2 more runs after fixing extraction
+
+4. **Validate corpus quality**
+   - Spot-check transcript completeness
+   - Verify frontmatter accuracy (dates, episode numbers)
+
+### Medium-term (RAG pipeline)
+
+5. **Build embedding pipeline**
+   - Chunk documents (heading-aware for blog, timestamp-aware for transcripts)
+   - Generate embeddings (OpenAI, Cohere, or local model)
+   - Store in pgvector or dedicated vector DB
+
+6. **Create retrieval API**
+   - Query interface for semantic search
+   - Filter by source, date, category
+   - Return relevant chunks with metadata
+
+### Long-term (applications)
+
+7. **Chat interface**
+   - RAG-powered Q&A over the corpus
+   - Citation of sources
+   - Multi-turn conversation
+
+8. **Additional sources**
+   - YouTube transcripts
+   - Other podcasts
+   - Personal notes integration
