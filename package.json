@@ -4,7 +4,8 @@
   "main": "index.js",
   "scripts": {
     "scrape": "tsx -r dotenv/config src/scrapePaulChekBlog.ts",
-    "scrape:founders": "tsx -r dotenv/config src/scrapeFoundersPodcast.ts"
+    "scrape:founders": "tsx -r dotenv/config src/scrapeFoundersPodcast.ts",
+    "rag": "tsx -r dotenv/config src/rag.ts"
   },
   "keywords": [],
   "author": "",
@@ -16,6 +17,7 @@
     "@sentry/profiling-node": "^10.32.1",
     "dotenv": "^16.4.5",
     "fs-extra": "^11.3.2",
+    "openai": "^6.15.0",
     "pg": "^8.16.3",
     "playwright": "^1.57.0",
     "zod": "4.1.8"

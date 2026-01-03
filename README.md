@@ -374,9 +374,53 @@ This eliminates the LLM reliability issues (element IDs instead of URLs) that pl
 
 **Transcript extraction bug**: Some episodes (e.g., #95 Claude Shannon, #141 Arnold Schwarzenegger) have transcripts on the site but return only 467 chars (page boilerplate). The DOM extraction selectors may not match the page structure for older episodes. These need manual review or selector improvements.
 
-## Next steps
+## RAG Pipeline
+
+The project includes a RAG (Retrieval-Augmented Generation) pipeline for semantic search over the corpus.
+
+### Prerequisites
+
+1. **pgvector extension** on your PostgreSQL server:
+   - macOS: `brew install pgvector`
+   - Ubuntu: `sudo apt install postgresql-17-pgvector`
+   - Railway: Use a PostgreSQL template with pgvector support
+
+2. **OpenAI API key** for embeddings:
+   ```bash
+   OPENAI_API_KEY=your_key_here
+   ```
+
+### Usage
+
+```bash
+# 1. Chunk all posts into semantic segments
+npm run rag chunk
+
+# 2. Generate embeddings for all chunks
+npm run rag embed
+
+# 3. Search the corpus
+npm run rag search "how does Paul Chek approach nutrition"
+
+# Check stats
+npm run rag stats
+```
+
+### How It Works
+
+1. **Semantic Chunking**: Posts are split by headings/paragraphs into ~500 token chunks with overlap
+2. **OpenAI Embeddings**: Each chunk is embedded using `text-embedding-3-large` (3072 dimensions)
+3. **Vector Search**: Queries are embedded and matched against chunks using cosine similarity in pgvector
+
+### Cost Estimate
+
+- ~1,200 documents × ~5 chunks/doc × 500 tokens/chunk = ~3M tokens
+- At $0.13/1M tokens (text-embedding-3-large) = ~$0.40 total
+
+## Next Steps
 
 Once you have a local corpus of Markdown posts, you can:
 
-- Feed them into a RAG pipeline (e.g. using pgvector, OpenAI File Search, or your own embeddings store).
-- Combine this scraper with your other ingestion tools (YouTube transcripts, notes) for a unified knowledge base.
+- Use the RAG pipeline for semantic search and Q&A
+- Feed results into an LLM for chat-style interactions
+- Combine this scraper with other ingestion tools (YouTube transcripts, notes) for a unified knowledge base
